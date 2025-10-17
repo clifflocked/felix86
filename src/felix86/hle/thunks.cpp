@@ -255,12 +255,12 @@ struct Thunk {
 #define X(lib_name, function_name, signature) {lib_name, #function_name, #signature, 0},
 
 static Thunk thunk_metadata[] = {
-#include "egl_thunks.inc"
-#include "gl_thunks.inc"
-#include "glx_thunks.inc"
-#include "luajit_thunks.inc"
-#include "vulkan_thunks.inc"
-#include "wayland-client_thunks.inc"
+#include "signatures/64/egl_thunks.inc"
+#include "signatures/64/gl_thunks.inc"
+#include "signatures/64/glx_thunks.inc"
+#include "signatures/64/luajit_thunks.inc"
+#include "signatures/64/vulkan_thunks.inc"
+#include "signatures/64/wayland-client_thunks.inc"
 };
 
 #undef X

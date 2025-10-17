@@ -286,6 +286,7 @@ void initialize_globals() {
         g_mounts_path = path;
     }
 
+    std::error_code ec;
     const char* guest_rootfs = getenv("__FELIX86_ROOTFS");
     if (guest_rootfs) {
         g_config.rootfs_path = guest_rootfs;
@@ -340,7 +341,7 @@ void initialize_globals() {
             int code = WEXITSTATUS(status);
             if (code == 0) {
                 std::filesystem::path path = buffer;
-                if (std::filesystem::exists(path)) {
+                if (std::filesystem::exists(path, ec)) {
                     // Relocate executable path
                     std::string new_executable_path =
                         !g_params.executable_path.empty() ? std::filesystem::absolute(g_params.executable_path) : g_params.executable_path;
@@ -382,7 +383,7 @@ void initialize_globals() {
 
     ASSERT_MSG(!g_mounts_path.empty(), "Mounts path is empty?");
 
-    if (!std::filesystem::exists(g_config.rootfs_path)) {
+    if (!std::filesystem::exists(g_config.rootfs_path, ec)) {
         ERROR("Rootfs path does <%s> not exist", g_config.rootfs_path.c_str());
     }
 
@@ -392,8 +393,8 @@ void initialize_globals() {
     }
 
     ASSERT_MSG(g_config.rootfs_path.string().back() != '/', "Rootfs path should not end in '/'");
-    ASSERT(std::filesystem::exists(g_config.rootfs_path));
-    ASSERT(std::filesystem::is_directory(g_config.rootfs_path));
+    ASSERT(std::filesystem::exists(g_config.rootfs_path, ec));
+    ASSERT(std::filesystem::is_directory(g_config.rootfs_path, ec));
     g_rootfs_fd = open(g_config.rootfs_path.c_str(), O_PATH | O_DIRECTORY);
     ASSERT_MSG(g_rootfs_fd > 0, "Failed to open rootfs directory");
     g_rootfs_fd = FD::moveToHighNumber(g_rootfs_fd);
@@ -420,8 +421,10 @@ void initialize_globals() {
     }
 
     // For perf symbols
-    if (!std::filesystem::exists("/tmp")) {
-        std::filesystem::create_directory("/tmp");
+    if (!std::filesystem::exists("/tmp", ec)) {
+        if (!std::filesystem::create_directory("/tmp", ec)) {
+            WARN("/tmp doesn't exist and failed to create it?");
+        }
     }
 
     int perfs = g_config.perf_blocks + g_config.perf_libs + g_config.perf_global;
@@ -513,7 +516,7 @@ void initialize_globals() {
 
         // Check if we can find the .Xauthority file inside the rootfs, otherwise warn
         // Since many distros put it in /run we should be able to
-        if (!std::filesystem::exists(g_config.rootfs_path / xauthority_path.relative_path())) {
+        if (!std::filesystem::exists(g_config.rootfs_path / xauthority_path.relative_path(), ec)) {
             WARN("I couldn't find the .Xauthority file inside the rootfs");
         }
     }
@@ -521,7 +524,6 @@ void initialize_globals() {
     if (!g_execve_process) {
         // Check if $HOME exists inside the rootfs, and create it if not
         if (getenv("HOME")) {
-            std::error_code ec;
             std::filesystem::path home_path = getenv("HOME");
             std::filesystem::create_directories(g_config.rootfs_path / home_path.relative_path(), ec);
         }
