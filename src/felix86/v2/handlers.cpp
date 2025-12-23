@@ -1,6 +1,9 @@
 #include <Zydis/Zydis.h>
+#include "Zydis/Register.h"
 #include "Zydis/SharedTypes.h"
+#include "biscuit/label.hpp"
 #include "felix86/common/config.hpp"
+#include "felix86/common/global.hpp"
 #include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
 #include "felix86/common/utility.hpp"
@@ -2462,6 +2465,24 @@ FAST_HANDLE(JMP) {
         biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
         // Don't need to zero extend here as it's loaded as a DWORD
         as.MV(ripreg, src);
+        if (g_config.predict_jmp_mem && operands[0].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[0].mem.base != ZYDIS_REGISTER_NONE &&
+            rec.zydisToRef(operands[0].mem.base) == X86_REF_RIP) {
+            // RIP-relative memory jump, this is a common pattern in tail call jumps to libraries (points to got.plt)
+            u64 address = rip + instruction.length + operands[0].mem.disp.value;
+            if (g_mode32) {
+                address = (u32)address;
+            }
+
+            u64 data = g_mode32 ? *(u32*)address : *(u64*)address;
+            if (data != 0) {
+                biscuit::Label mispredict;
+                biscuit::GPR prediction = rec.scratch();
+                as.LI(prediction, data);
+                as.BNE(prediction, src, &mispredict);
+                rec.jumpAndLink(data);
+                as.Bind(&mispredict);
+            }
+        }
         rec.backToDispatcher();
         rec.stopCompiling();
         break;

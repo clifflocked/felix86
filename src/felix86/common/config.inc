@@ -53,3 +53,4 @@ X(Performance, bool, auto_compress, false, FELIX86_AUTO_COMPRESS, "Automatically
 X(Performance, bool, scan_ahead_multi, true, FELIX86_SCAN_AHEAD_MULTI, "Scan ahead to multiple blocks when possible, avoiding even more flag calculations", false)
 X(Performance, bool, pclmulqdq, true, FELIX86_PCLMULQDQ, "Enable the PCLMULQDQ instruction, might improve performance in some applications", false)
 X(Performance, bool, no_address_overflow, true, FELIX86_NO_ADDRESS_OVERFLOW, "Assume addresses won't overflow in 32-bit apps, which allows for some optimizations", false)
+X(Performance, bool, predict_jmp_mem, true, FELIX86_PREDICT_JMP_MEM, "Try to predict jmp[rip+...] by reading the memory ahead of time", false)
