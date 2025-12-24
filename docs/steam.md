@@ -15,7 +15,7 @@
 
 ## Step 2 - Installation
 - Move the package you just downloaded inside your rootfs
-- Enter felix86 bash (`felix86 /bin/bash`) and install the package using `sudo dpkg -i ./steam_latest.deb`
+- Enter felix86 bash (`felix86 --shell` or `felix86 /path/to/rootfs/bin/bash`) and install the package using `sudo dpkg -i ./steam_latest.deb`
 
 ## Step 3 - Running
 - If you're on wayland, run `export SDL_VIDEODRIVER=x11` as it may not work on Wayland currently
