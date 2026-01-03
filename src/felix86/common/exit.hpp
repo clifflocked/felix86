@@ -11,4 +11,4 @@ enum ExitReason : uint8_t {
     EXIT_REASON_SIGRETURN = 5,
 };
 
-void felix86_exit(int code);
+[[noreturn]] void felix86_exit(int code);

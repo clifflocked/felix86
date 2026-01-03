@@ -182,6 +182,194 @@ bool try_strace_ioctl(int rdi, u64 rsi, u64 rdx, u64 result) {
     return false;
 }
 
+int felix86_execveat(int fd, const char* cpath, char** cargv, char** cenvp, int flags) {
+    if (!cpath) {
+        WARN("execve with nullptr as executable path?");
+        return -EINVAL;
+    }
+
+    bool resolve_final = (flags & AT_SYMLINK_NOFOLLOW) ? false : true;
+
+    SignalGuard guard;
+    FdPath fd_path = Filesystem::resolve(fd, cpath, resolve_final);
+
+    if (!resolve_final) {
+        struct stat stat;
+        if (lstat(fd_path.full_path(), &stat) == 0) {
+            if (S_ISLNK(stat.st_mode)) {
+                WARN("File %s is symlink and ran execveat with AT_SYMLINK_NOFOLLOW");
+                return -ELOOP;
+            }
+        } else {
+            WARN("Failed to check if %s is symlink during execveat", fd_path.full_path());
+        }
+    }
+
+    if (!fd_path.path() || !std::filesystem::exists(fd_path.full_path())) {
+        WARN("Execve couldn't find path: %s", cpath);
+        return -ENOENT;
+    }
+
+    std::filesystem::path path = fd_path.full_path();
+    if (!std::filesystem::is_regular_file(path)) {
+        WARN("Not regular file during execve: %s", path.c_str());
+        return -ENOENT;
+    }
+
+    std::vector<const char*> argv;
+    std::vector<const char*> envp;
+    std::string script_interpreter;
+    std::vector<std::string> script_args;
+
+    // This is going to be the first argument in execve
+    // Depending on if binfmt_misc is installed or not, it will be either the guest
+    // executable or the emulator
+    std::filesystem::path executable;
+
+    bool is_script = Script::Peek(path) == Script::PeekResult::Script;
+    if (!g_config.binfmt_misc_installed) {
+        // If binfmt_misc is not installed, push the emulator at the start of the arguments
+        executable = g_emulator_path;
+        argv.push_back(executable.c_str());
+
+        if (check_if_privileged_executable(path)) {
+            ASSERT_MSG(!is_script, "Script with setuid...?");
+
+            // If this is a privileged executable, it won't work out if we don't have binfmt_misc support
+            // Because binfmt_misc would see that the binary has extra permissions and give the emulator
+            // those permissions as well. When we run it through the emulator manually however, we can't
+            // do the same. So warn that this might end badly.
+            WARN("About to run privileged executable %s, but there's no binfmt_misc support, so things may go wrong. Please enable "
+                 "binfmt_misc support by running `felix86 -b` and disabling it for any other x86/x86-64 emulators");
+        }
+    } else {
+        executable = path;
+    }
+
+    // Don't push the emulator, push just the executable and binfmt_misc will figure it out
+    // If it's a script we need to push the interpreter too
+    if (is_script) {
+        Script script(path);
+        const std::string& args = script.GetArgs();
+        script_interpreter = script.GetInterpreter();
+        FdPath interpreter_fd_path = Filesystem::resolve(script_interpreter.c_str(), true);
+        ASSERT(interpreter_fd_path.full_path());
+        ASSERT(interpreter_fd_path.full_path()[0] == '/');
+        script_interpreter = interpreter_fd_path.full_path();
+        script_args = split_string(args, ' ');
+        argv.push_back(script_interpreter.c_str());
+        for (auto it = script_args.begin(); it < script_args.end(); it++) {
+            if (it->empty())
+                continue;
+
+            argv.push_back(it->c_str());
+        }
+
+        if (g_config.binfmt_misc_installed) {
+            executable = script_interpreter;
+        } else {
+            // Retain emulator path
+        }
+
+        path = std::filesystem::absolute(path);
+        if (path.string().find(g_config.rootfs_path.string()) != 0) {
+            WARN("Script path is not inside rootfs? %s", path.c_str()); // TODO: might be inside a trusted folder, check and don't warn
+        } else {
+            // We are running it through emulated bash, so the script itself needs to be a regular path
+            path = path.string().substr(g_config.rootfs_path.string().size());
+        }
+    }
+
+    argv.push_back(path.c_str());
+
+    if (cargv) {
+        u8* guest_argv = (u8*)cargv;
+        guest_argv += g_mode32 ? 4 : 8;
+        while (true) {
+            u64 ptr = 0;
+            memcpy(&ptr, guest_argv, g_mode32 ? 4 : 8);
+            if (ptr == 0) {
+                break;
+            }
+
+            argv.push_back((const char*)ptr);
+            guest_argv += g_mode32 ? 4 : 8;
+        }
+    } else {
+        WARN("argv null during execve...?");
+    }
+    argv.push_back(nullptr);
+
+    char** host_environ = environ;
+    while (*host_environ) {
+        std::string env = *host_environ;
+        if (env.find("__FELIX86") == std::string::npos) {
+            envp.push_back(*host_environ);
+        }
+        host_environ++;
+    }
+
+    std::string argv0_original = std::string("__FELIX86_ARGV0=") + cpath;
+    std::string guest_envs = "__FELIX86_GUEST_ENVS=";
+    if (cenvp) {
+        u8* guest_envp = (u8*)cenvp;
+        while (true) {
+            u64 ptr = 0;
+            memcpy(&ptr, guest_envp, g_mode32 ? 4 : 8);
+            if (ptr == 0) {
+                break;
+            }
+
+            guest_envs += (const char*)ptr;
+            guest_envs += ",";
+
+            guest_envp += g_mode32 ? 4 : 8;
+        }
+
+        if (!guest_envs.empty()) {
+            guest_envs.pop_back();
+        }
+
+        envp.push_back(guest_envs.c_str());
+    } else {
+        WARN("envp null during execve...?");
+    }
+
+    // We need to tell the new process where the server is
+    std::string log_env = std::string("__FELIX86_PIPE=") + Logger::getPipeName();
+    envp.push_back("__FELIX86_EXECVE=1");
+    envp.push_back(argv0_original.c_str());
+    std::string config_hex = std::string("__FELIX86_CONFIG=") + Config::getConfigHex();
+    envp.push_back(config_hex.c_str());
+    envp.push_back(log_env.c_str());
+    std::string rootfs_env = std::string("__FELIX86_ROOTFS=") + g_config.rootfs_path.string();
+    envp.push_back(rootfs_env.c_str());
+    if (!g_mounts_path.empty()) {
+        std::string mounts_env = std::string("__FELIX86_MOUNTS=") + g_mounts_path.string();
+        envp.push_back(mounts_env.c_str());
+    }
+    size_t current_mount = 0;
+    for (auto& mount_path : g_process_globals.mount_paths) {
+        envp.push_back(strdup((std::string("__FELIX86_MOUNT_") + std::to_string(current_mount++) + "=" + mount_path.string()).c_str()));
+    }
+    envp.push_back(nullptr);
+
+    std::string args = "";
+    for (auto arg : argv) {
+        args += " ";
+        args += arg ? arg : "";
+    }
+
+    LOG("Running execve on %s, wish me luck. Args:%s", executable.c_str(), args.c_str());
+
+    // Undo signal guard so the child doesn't inherit the bad mask
+    guard.kill();
+
+    syscall(SYS_execve, executable.c_str(), &argv[0], envp.data());
+
+    ASSERT_MSG(false, "Error during execve: %s (executable: %s)", strerror(errno), executable.c_str());
+}
+
 Result felix86_syscall_common(felix86_frame* frame, int rv_syscall, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6) {
     ThreadState* state = frame->state;
     Result result;
@@ -1405,180 +1593,11 @@ Result felix86_syscall_common(felix86_frame* frame, int rv_syscall, u64 arg1, u6
         break;
     }
     case felix86_riscv64_execve: {
-        if (!arg1) {
-            WARN("execve with nullptr as executable path?");
-            result = -EINVAL;
-            break;
-        }
-
-        SignalGuard guard;
-        FdPath fd_path = Filesystem::resolve((char*)arg1, true);
-
-        if (!fd_path.path() || !std::filesystem::exists(fd_path.full_path())) {
-            WARN("Execve couldn't find path: %s", arg1);
-            result = -ENOENT;
-            break;
-        }
-
-        std::filesystem::path path = fd_path.full_path();
-        if (!std::filesystem::is_regular_file(path)) {
-            WARN("Not regular file during execve: %s", path.c_str());
-            result = -ENOENT;
-            break;
-        }
-
-        std::vector<const char*> argv;
-        std::vector<const char*> envp;
-        std::string script_interpreter;
-        std::vector<std::string> script_args;
-
-        // This is going to be the first argument in execve
-        // Depending on if binfmt_misc is installed or not, it will be either the guest
-        // executable or the emulator
-        std::filesystem::path executable;
-
-        bool is_script = Script::Peek(path) == Script::PeekResult::Script;
-        if (!g_config.binfmt_misc_installed) {
-            // If binfmt_misc is not installed, push the emulator at the start of the arguments
-            executable = g_emulator_path;
-            argv.push_back(executable.c_str());
-
-            if (check_if_privileged_executable(path)) {
-                ASSERT_MSG(!is_script, "Script with setuid...?");
-
-                // If this is a privileged executable, it won't work out if we don't have binfmt_misc support
-                // Because binfmt_misc would see that the binary has extra permissions and give the emulator
-                // those permissions as well. When we run it through the emulator manually however, we can't
-                // do the same. So warn that this might end badly.
-                WARN("About to run privileged executable %s, but there's no binfmt_misc support, so things may go wrong. Please enable "
-                     "binfmt_misc support by running `felix86 -b` and disabling it for any other x86/x86-64 emulators");
-            }
-        } else {
-            executable = path;
-        }
-
-        // Don't push the emulator, push just the executable and binfmt_misc will figure it out
-        // If it's a script we need to push the interpreter too
-        if (is_script) {
-            Script script(path);
-            const std::string& args = script.GetArgs();
-            script_interpreter = script.GetInterpreter();
-            FdPath interpreter_fd_path = Filesystem::resolve(script_interpreter.c_str(), true);
-            ASSERT(interpreter_fd_path.full_path());
-            ASSERT(interpreter_fd_path.full_path()[0] == '/');
-            script_interpreter = interpreter_fd_path.full_path();
-            script_args = split_string(args, ' ');
-            argv.push_back(script_interpreter.c_str());
-            for (auto it = script_args.begin(); it < script_args.end(); it++) {
-                if (it->empty())
-                    continue;
-
-                argv.push_back(it->c_str());
-            }
-
-            if (g_config.binfmt_misc_installed) {
-                executable = script_interpreter;
-            } else {
-                // Retain emulator path
-            }
-
-            path = std::filesystem::absolute(path);
-            if (path.string().find(g_config.rootfs_path.string()) != 0) {
-                WARN("Script path is not inside rootfs? %s", path.c_str()); // TODO: might be inside a trusted folder, check and don't warn
-            } else {
-                // We are running it through emulated bash, so the script itself needs to be a regular path
-                path = path.string().substr(g_config.rootfs_path.string().size());
-            }
-        }
-
-        argv.push_back(path.c_str());
-
-        if (arg2) {
-            u8* guest_argv = (u8*)arg2;
-            guest_argv += g_mode32 ? 4 : 8;
-            while (true) {
-                u64 ptr = 0;
-                memcpy(&ptr, guest_argv, g_mode32 ? 4 : 8);
-                if (ptr == 0) {
-                    break;
-                }
-
-                argv.push_back((const char*)ptr);
-                guest_argv += g_mode32 ? 4 : 8;
-            }
-        } else {
-            WARN("argv null during execve...?");
-        }
-        argv.push_back(nullptr);
-
-        char** host_environ = environ;
-        while (*host_environ) {
-            std::string env = *host_environ;
-            if (env.find("__FELIX86") == std::string::npos) {
-                envp.push_back(*host_environ);
-            }
-            host_environ++;
-        }
-
-        std::string argv0_original = std::string("__FELIX86_ARGV0=") + (char*)arg1;
-        std::string guest_envs = "__FELIX86_GUEST_ENVS=";
-        if (arg3) {
-            u8* guest_envp = (u8*)arg3;
-            while (true) {
-                u64 ptr = 0;
-                memcpy(&ptr, guest_envp, g_mode32 ? 4 : 8);
-                if (ptr == 0) {
-                    break;
-                }
-
-                guest_envs += (const char*)ptr;
-                guest_envs += ",";
-
-                guest_envp += g_mode32 ? 4 : 8;
-            }
-
-            if (!guest_envs.empty()) {
-                guest_envs.pop_back();
-            }
-
-            envp.push_back(guest_envs.c_str());
-        } else {
-            WARN("envp null during execve...?");
-        }
-
-        // We need to tell the new process where the server is
-        std::string log_env = std::string("__FELIX86_PIPE=") + Logger::getPipeName();
-        envp.push_back("__FELIX86_EXECVE=1");
-        envp.push_back(argv0_original.c_str());
-        std::string config_hex = std::string("__FELIX86_CONFIG=") + Config::getConfigHex();
-        envp.push_back(config_hex.c_str());
-        envp.push_back(log_env.c_str());
-        std::string rootfs_env = std::string("__FELIX86_ROOTFS=") + g_config.rootfs_path.string();
-        envp.push_back(rootfs_env.c_str());
-        if (!g_mounts_path.empty()) {
-            std::string mounts_env = std::string("__FELIX86_MOUNTS=") + g_mounts_path.string();
-            envp.push_back(mounts_env.c_str());
-        }
-        size_t current_mount = 0;
-        for (auto& mount_path : g_process_globals.mount_paths) {
-            envp.push_back(strdup((std::string("__FELIX86_MOUNT_") + std::to_string(current_mount++) + "=" + mount_path.string()).c_str()));
-        }
-        envp.push_back(nullptr);
-
-        std::string args = "";
-        for (auto arg : argv) {
-            args += " ";
-            args += arg ? arg : "";
-        }
-
-        LOG("Running execve on %s, wish me luck. Args:%s", executable.c_str(), args.c_str());
-
-        // Undo signal guard so the child doesn't inherit the bad mask
-        guard.kill();
-
-        syscall(SYS_execve, executable.c_str(), &argv[0], envp.data());
-
-        ASSERT_MSG(false, "Error during execve: %s (executable: %s)", strerror(errno), executable.c_str());
+        result = felix86_execveat(AT_FDCWD, (char*)arg1, (char**)arg2, (char**)arg3, 0);
+        break;
+    }
+    case felix86_riscv64_execveat: {
+        result = felix86_execveat(arg1, (char*)arg2, (char**)arg3, (char**)arg4, arg5);
         break;
     }
     case felix86_riscv64_umask: {

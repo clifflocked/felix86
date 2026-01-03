@@ -5,7 +5,7 @@
 #include "felix86/common/state.hpp"
 #include "felix86/common/utility.hpp"
 
-void felix86_exit(int code) {
+[[noreturn]] void felix86_exit(int code) {
     if (g_config.dump_regs) {
         ThreadState* state = ThreadState::Get();
         if (state) {
