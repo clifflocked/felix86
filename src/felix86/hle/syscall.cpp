@@ -191,17 +191,24 @@ int felix86_execveat(int fd, const char* cpath, char** cargv, char** cenvp, int 
     bool resolve_final = (flags & AT_SYMLINK_NOFOLLOW) ? false : true;
 
     SignalGuard guard;
-    FdPath fd_path = Filesystem::resolve(fd, cpath, resolve_final);
+
+    int resolved_fd;
+    const char* resolved_path;
+
+    if ((flags & AT_EMPTY_PATH) && cpath && std::string(cpath).empty()) {
+    } else {
+        FdPath fd_path = Filesystem::resolve(fd, cpath, resolve_final);
+    }
 
     if (!resolve_final) {
         struct stat stat;
-        if (lstat(fd_path.full_path(), &stat) == 0) {
+        if (fstatat(resolved_fd, resolved_path, &stat, AT_SYMLINK_NOFOLLOW) == 0) {
             if (S_ISLNK(stat.st_mode)) {
                 WARN("File %s is symlink and ran execveat with AT_SYMLINK_NOFOLLOW");
                 return -ELOOP;
             }
         } else {
-            WARN("Failed to check if %s is symlink during execveat", fd_path.full_path());
+            WARN("Failed to check if %d %s is symlink during execveat", resolved_fd, resolved_path);
         }
     }
 
@@ -210,10 +217,9 @@ int felix86_execveat(int fd, const char* cpath, char** cargv, char** cenvp, int 
         return -ENOENT;
     }
 
-    std::filesystem::path path = fd_path.full_path();
-    if (!std::filesystem::is_regular_file(path)) {
-        WARN("Not regular file during execve: %s", path.c_str());
-        return -ENOENT;
+    if (!resolved_path) {
+    todo:
+        needs the final syscall to be handled properly
     }
 
     std::vector<const char*> argv;
