@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <sys/mman.h>
+#include "felix86/common/config.hpp"
 #include "felix86/common/state.hpp"
 #include "felix86/v2/recompiler.hpp"
 
@@ -63,6 +64,25 @@ ThreadState* ThreadState::Create(ThreadState* copy_state) {
     state->x86_trampoline_storage_start = state->x86_trampoline_storage;
     ASSERT(state->riscv_trampoline_storage != MAP_FAILED);
     ASSERT(state->x86_trampoline_storage != MAP_FAILED);
+
+    if (g_config.return_predict) {
+        // Allocate guard pages in either side
+        void* rsb_mem = mmap(nullptr, (rsb_stack_pages + 2) * 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (rsb_mem == MAP_FAILED) {
+            WARN("Allocating RSB stack failed, disabling return prediction");
+            g_config.return_predict = false;
+        } else {
+            int result = mprotect((u8*)rsb_mem + 4096, rsb_stack_pages * 4096, PROT_READ | PROT_WRITE);
+            if (result != 0) {
+                WARN("Failed to make RSB stack R/W, disabling return prediction");
+                g_config.return_predict = false;
+            } else {
+                u64 middle_of_stack = (u64)rsb_mem + 4096 + (rsb_stack_pages / 2) * 4096;
+                state->rsb_stack = middle_of_stack;
+                state->rsb_stack_start = (u64)rsb_mem;
+            }
+        }
+    }
 
     auto lock = g_process_globals.states_lock.lock();
     g_process_globals.states.push_back(state);

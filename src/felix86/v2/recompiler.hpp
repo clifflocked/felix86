@@ -67,6 +67,8 @@ struct Recompiler {
 
     u64 compile(ThreadState* state, u64 rip);
 
+    u64 compileImpl(ThreadState* state, u64 rip);
+
     inline Assembler& getAssembler() {
         return as;
     }
@@ -151,7 +153,7 @@ struct Recompiler {
 
     void setExitReason(ExitReason reason);
 
-    void backToDispatcher();
+    void backToDispatcher(bool use_ra = false);
 
     void writebackState();
 
@@ -185,7 +187,7 @@ struct Recompiler {
 
     u64 getSignMask(x86_size_e size_e);
 
-    void jumpAndLink(u64 rip);
+    void jumpAndLink(u64 rip, bool use_ra = false);
 
     void jumpAndLinkConditional(biscuit::GPR condition, u64 rip_true, u64 rip_false);
 
@@ -681,6 +683,8 @@ private:
     void markPagesAsReadOnly(u64 start, u64 end);
 
     void inlineSyscall(int sysno, int argcount);
+
+    static bool doesJumpLinkRa(u32 instruction);
 
     static void invalidateAt(ThreadState* state, u8* linked_block);
 

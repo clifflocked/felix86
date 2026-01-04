@@ -28,6 +28,8 @@ struct Recompiler;
 struct ThreadState;
 struct SignalHandlerTable;
 
+constexpr const int rsb_stack_pages = 64;
+
 typedef enum : u8 {
     X86_REF_RAX,
     X86_REF_RCX,
@@ -198,6 +200,8 @@ struct ThreadState {
     u8 fpu_top{};
 
     u64 first_frame{};
+    u64 rsb_stack{};
+    u64 rsb_stack_start{};
 
     // This is important so that we know whether the current values in the fp array are MMX registers or x87 registers
     // Because if they are x87 registers we need to f64_to_f80 them when saving using fsave or when reading from signal handlers

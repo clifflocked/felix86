@@ -6,7 +6,9 @@
 #include "felix86/common/config.hpp"
 #include "felix86/common/frame.hpp"
 #include "felix86/common/gdbjit.hpp"
+#include "felix86/common/log.hpp"
 #include "felix86/common/perf.hpp"
+#include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
 #include "felix86/common/utility.hpp"
 #include "felix86/emulator.hpp"
@@ -234,7 +236,8 @@ void Recompiler::emitDispatcher() {
 
         // Address cache was correct, jump to host address
         as.LD(rip, 0, temp);
-        as.MV(t5, x0); // zero out t5, see invalidate_caller_thunk
+        as.MV(t5, x0);                  // zero out t5, see invalidate_caller_thunk
+        ASSERT(rip != x1 && rip != x5); // these use RSB
         as.JR(rip);
 
         as.Bind(&not_equal);
@@ -247,11 +250,14 @@ void Recompiler::emitDispatcher() {
     as.MV(a0, threadStatePointer());
     call((u64)Emulator::CompileNext);
 
+    (void)scratch(); // x1, don't use it in JR later
     biscuit::GPR retval = scratch();
     as.MV(retval, a0);
     restoreState();
-    as.MV(t5, x0); // zero out t5, see invalidate_caller_thunk
+    as.MV(t5, x0);                        // zero out t5, see invalidate_caller_thunk
+    ASSERT(retval != x1 && retval != x5); // these use RSB
     as.JR(retval);
+    popScratch();
     popScratch();
 
     exit_dispatcher = (decltype(exit_dispatcher))as.GetCursorPointer();
@@ -351,7 +357,9 @@ void Recompiler::invalidateAt(ThreadState* state, u8* linked_block) {
             state->recompiler->as.SetCursorPointer(link_location);
             // Because there was a writebackState before entering this function, state->rip contains the guest address that we tried
             // to jump to before getting hit by this invalidation. So we can jumpAndLink there.
-            state->recompiler->jumpAndLink(state->rip);
+            u32 jump_instruction = *(u32*)(link_location + 4);
+            bool use_ra = doesJumpLinkRa(jump_instruction);
+            state->recompiler->jumpAndLink(state->rip, use_ra);
             state->recompiler->as.SetCursorPointer(cursor);
             flush_icache();
         }
@@ -384,6 +392,8 @@ void Recompiler::clearCodeCache(ThreadState* state) {
             for (size_t i = 0; i < (1 << address_cache_bits); i++) {
                 address_cache[i] = AddressCacheEntry{};
             }
+            memset((u8*)state->rsb_stack_start + 4096, 0, rsb_stack_pages * 4096);
+            state->rsb_stack = state->rsb_stack_start + 4096 + (rsb_stack_pages / 2) * 4096;
 
             as.RewindBuffer();
             emitNecessaryStuff();
@@ -400,6 +410,8 @@ void Recompiler::clearCodeCache(ThreadState* state) {
         for (size_t i = 0; i < (1 << address_cache_bits); i++) {
             address_cache[i] = AddressCacheEntry{};
         }
+        memset((u8*)state->rsb_stack_start + 4096, 0, rsb_stack_pages * 4096);
+        state->rsb_stack = state->rsb_stack_start + 4096 + (rsb_stack_pages / 2) * 4096;
 
         as.RewindBuffer();
         emitNecessaryStuff();
@@ -409,11 +421,39 @@ void Recompiler::clearCodeCache(ThreadState* state) {
 u64 Recompiler::compile(ThreadState* state, u64 rip) {
     u64 size = code_cache_sizes[code_cache_size_index];
     size_t remaining_size = size - as.GetCodeBuffer().GetCursorOffset();
-    // TODO: restrict max x86 instruction count per block
+    // TODO: restrict max block size to be 100% certain
     if (remaining_size < 400'000) { // less than ~400KB left, clear cache
         clearCodeCache(state);
     }
+    // if (!g_config.return_predict) {
+    return compileImpl(state, rip);
+    // } else {
+    //     u64 start = compileImpl(state, rip);
 
+    //     // Check if last instruction was a call and keep compiling if it is
+    //     // The vast majority of the time, all of the instructions after the call will be executed
+    //     // So it's usually better to keep compiling anyway... Plus after the ret prediction there will be code
+    //     // to execute without having to jump to it after linking
+    //     while (current_instruction->mnemonic == ZYDIS_MNEMONIC_CALL) {
+    //         // Compile the next block too
+    //         u64 size = code_cache_sizes[code_cache_size_index];
+    //         size_t remaining_size = size - as.GetCodeBuffer().GetCursorOffset();
+    //         if (remaining_size < 400'000) { // less than ~400KB left, emit backToDispatcher after the last call
+    //             ASSERT(remaining_size > 8);
+    //             WARN("Ending block early as we're running out of space");
+    //             backToDispatcher();
+    //             return start;
+    //         }
+
+    //         // Compile the next block too. If return address is predicted, the landing location will have instructions ready
+    //         compileImpl(state, current_rip);
+    //     }
+
+    //     return start;
+    // }
+}
+
+u64 Recompiler::compileImpl(ThreadState* state, u64 rip) {
     // This should never happen, but we have this here to catch it if it does and report it
     if (g_mode32 && (rip & 0xFFFF'FFFF'0000'0000)) {
         if (rip >= 0x1'0000'0000 && rip <= 0x1'FFFF'FFFF) {
@@ -2067,21 +2107,23 @@ void Recompiler::restoreState() {
     cached_lea_operand = nullptr;
 }
 
-void Recompiler::backToDispatcher() {
+void Recompiler::backToDispatcher(bool use_ra) {
     OptimizationGuard guard(as, optimization_guard_counter);
+    use_ra &= g_config.rsb;
+    biscuit::GPR temp = use_ra ? ra : t6;
     if (!relocatable) {
         const u64 offset = compile_next_handler - (u64)as.GetCursorPointer();
         ASSERT(IsValid2GBImm(offset));
         const auto hi20 = static_cast<int32_t>(((static_cast<uint32_t>(offset) + 0x800) >> 12) & 0xFFFFF);
         const auto lo12 = static_cast<int32_t>(offset << 20) >> 20;
-        ASSERT(isScratch(t6));
-        as.AUIPC(t6, hi20);
-        as.JR(t6, lo12);
+        ASSERT(isScratch(temp));
+        as.AUIPC(temp, hi20);
+        as.JR(temp, lo12);
     } else {
-        ASSERT(isScratch(t6));
-        as.LD(t6, offsetof(ThreadState, recompiler), threadStatePointer());
-        as.LD(t6, offsetof(Recompiler, compile_next_handler), t6);
-        as.JR(t6);
+        ASSERT(isScratch(temp));
+        as.LD(temp, offsetof(ThreadState, recompiler), threadStatePointer());
+        as.LD(temp, offsetof(Recompiler, compile_next_handler), temp);
+        as.JR(temp);
     }
 }
 
@@ -2645,18 +2687,29 @@ void Recompiler::updateSign(biscuit::GPR result, x86_size_e size) {
     }
 }
 
-void Recompiler::jumpAndLink(u64 rip) {
+bool Recompiler::doesJumpLinkRa(u32 instruction) {
+    u32 opcode = instruction & 0x7F;
+    ASSERT_MSG(opcode == 0b1101111 || opcode == 0b1100111, "Opcode %lx is not a jump", opcode);
+    if (((instruction >> 7) & 0x1F) == ra.Index()) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void Recompiler::jumpAndLink(u64 rip, bool use_ra) {
     OptimizationGuard guard(as, optimization_guard_counter);
+    use_ra &= g_config.rsb;
     if (!g_config.link || relocatable) {
         // Just emit jump to dispatcher
-        backToDispatcher();
+        backToDispatcher(use_ra);
         return;
     }
 
     u8* start = as.GetCursorPointer();
     if (!blockExists(rip)) {
         u8* link_me = as.GetCursorPointer();
-        backToDispatcher();
+        backToDispatcher(use_ra);
 
         getBlockMetadata(rip).pending_links.push_back(link_me);
     } else {
@@ -2665,9 +2718,8 @@ void Recompiler::jumpAndLink(u64 rip) {
 
         u64 offset = target - (u64)as.GetCursorPointer();
         if (IsValidJTypeImm(offset - 4)) {
-            // TODO: if falling through to block, replace jump with auipc+addi to t5
             as.NOP();
-            as.J(offset - 4);
+            as.JAL(use_ra ? ra : x0, offset - 4);
         } else {
             // Too far for a regular jump, use AUIPC+JR
             ASSERT(IsValid2GBImm(offset));
@@ -2675,9 +2727,8 @@ void Recompiler::jumpAndLink(u64 rip) {
             const auto lo12 = static_cast<int32_t>(offset << 20) >> 20;
 
             ASSERT(isScratch(t4));
-            ASSERT(isScratch(t5));
-            as.AUIPC(t4, hi20);
-            as.JR(t4, lo12);
+            as.AUIPC(use_ra ? ra : t4, hi20);
+            as.JR(use_ra ? ra : t4, lo12);
         }
     }
 
@@ -2735,7 +2786,9 @@ void Recompiler::expirePendingLinks(u64 rip) {
     for (u8* link : pending_links) {
         u8* cursor = as.GetCursorPointer();
         as.SetCursorPointer(link);
-        jumpAndLink(rip);
+        u32 jump_instruction = *(u32*)(link + 4);
+        bool use_ra = doesJumpLinkRa(jump_instruction);
+        jumpAndLink(rip, use_ra);
         as.SetCursorPointer(cursor);
     }
 

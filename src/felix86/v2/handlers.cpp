@@ -1,5 +1,5 @@
 #include <Zydis/Zydis.h>
-#include "Zydis/SharedTypes.h"
+#include "biscuit/label.hpp"
 #include "felix86/common/config.hpp"
 #include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
@@ -1642,37 +1642,48 @@ FAST_HANDLE(UD2) {
 FAST_HANDLE(CALL) {
     rec.pushCalltrace();
 
+    Label after_call;
+    biscuit::GPR guest_return_address = rec.scratch(); // x1
+    biscuit::GPR host_return_address = rec.scratch();  // x6
+    biscuit::GPR stack = rec.scratch();                // x28
+    biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
+    u64 return_address_offset = (rip - rec.getCurrentMetadata().guest_address) + instruction.length;
+    rec.addi(guest_return_address, ripreg, return_address_offset);
+
+    if (g_config.return_predict) {
+        // Push our prediction to the stack
+        as.LI_(host_return_address, &after_call);
+        as.LD(stack, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+        // Possible fault point on overflow
+        as.SD(guest_return_address, -16, stack); // SD(x1, -16, x28)
+        as.SD(host_return_address, -8, stack);
+        as.ADDI(stack, stack, -16);
+        as.SD(stack, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+    }
+
     switch (operands[0].type) {
     case ZYDIS_OPERAND_TYPE_REGISTER:
     case ZYDIS_OPERAND_TYPE_MEMORY: {
         biscuit::GPR src = rec.getGPR(&operands[0]);
-        biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
         // Don't need to zero extend here as it's loaded as a DWORD
         as.MV(ripreg, src);
         biscuit::GPR rsp = rec.getGPR(X86_REF_RSP, rec.stackWidth());
         as.ADDI(rsp, rsp, -rec.stackPointerSize());
         rec.setGPR(X86_REF_RSP, rec.stackWidth(), rsp);
-
-        biscuit::GPR scratch = rec.scratch();
-        u64 return_address = rip + instruction.length;
-        as.LI(scratch, return_address);
-        rec.writeMemory(scratch, rsp, 0, rec.stackWidth());
-        rec.backToDispatcher();
+        rec.writeMemory(guest_return_address, rsp, 0, rec.stackWidth());
+        rec.backToDispatcher(g_config.rsb);
         rec.stopCompiling();
         break;
     }
     case ZYDIS_OPERAND_TYPE_IMMEDIATE: {
         u64 displacement = rec.sextImmediate(rec.getImmediate(&operands[0]), operands[0].imm.size);
-        u64 return_address_offset = (rip - rec.getCurrentMetadata().guest_address) + instruction.length;
 
         biscuit::GPR rsp = rec.getGPR(X86_REF_RSP, rec.stackWidth());
         as.ADDI(rsp, rsp, -rec.stackPointerSize());
         rec.setGPR(X86_REF_RSP, rec.stackWidth(), rsp);
 
-        biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
-        rec.addi(ripreg, ripreg, return_address_offset);
-        rec.writeMemory(ripreg, rsp, 0, rec.stackWidth());
-        rec.addi(ripreg, ripreg, displacement);
+        rec.writeMemory(guest_return_address, rsp, 0, rec.stackWidth());
+        rec.addi(ripreg, guest_return_address, displacement);
         u64 address = rip + instruction.length + displacement;
         if (g_mode32) {
             rec.zext(ripreg, ripreg, X86_SIZE_DWORD);
@@ -1680,7 +1691,7 @@ FAST_HANDLE(CALL) {
         }
         u8* here = as.GetCursorPointer();
         as.AUIPC(t5, 0); // <- must be before link point, see invalidate_caller_thunk
-        rec.jumpAndLink(address);
+        rec.jumpAndLink(address, g_config.rsb);
         if (!rec.isRelocatable()) {
             ASSERT(as.GetCursorPointer() == here + 12);
         }
@@ -1692,13 +1703,35 @@ FAST_HANDLE(CALL) {
         break;
     }
     }
+
+    as.Bind(&after_call);
+
+    if (g_config.return_predict) {
+        // For now, just jump to the next block
+        // TODO: in the future, don't end blocks on calls and don't allow blocks to get too big if a call
+        // is not expected to return
+        rec.jumpAndLink(rip + instruction.length);
+    } else {
+        as.C_UNDEF();
+        as.C_UNDEF();
+    }
+}
+
+void test() {
+    printf("misprediction\n");
 }
 
 FAST_HANDLE(RET) {
     rec.popCalltrace();
 
-    biscuit::GPR rsp = rec.getGPR(X86_REF_RSP, rec.stackWidth());
+    biscuit::GPR ra_reg = rec.scratch(); // waste RA register to use later
+    ASSERT(ra_reg == ra);
+    biscuit::GPR stack = rec.scratch();
+    ASSERT(stack == x6);
+    biscuit::GPR prediction = rec.scratch();
+    ASSERT(prediction == x28);
     biscuit::GPR scratch = rec.scratch();
+    biscuit::GPR rsp = rec.getGPR(X86_REF_RSP, rec.stackWidth());
     rec.readMemory(scratch, rsp, 0, rec.stackWidth());
 
     u64 imm = rec.stackPointerSize();
@@ -1713,6 +1746,36 @@ FAST_HANDLE(RET) {
     biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
     // Don't need to zero extend here as it's loaded as a DWORD
     as.MV(ripreg, scratch);
+
+    if (g_config.return_predict) {
+        biscuit::Label after;
+        as.LD(stack, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+
+        // Potential fault point if we underflow the stack
+        as.LD(prediction, 0, stack); // essentially LD(x28, 0, x6)
+
+        biscuit::GPR temp;
+        if (g_config.rsb) {
+            temp = ra_reg;
+        } else {
+            temp = rec.scratch();
+        }
+
+        as.LD(temp, 8, stack);
+        as.ADDI(stack, stack, 16);
+        as.SD(stack, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+
+        // forward branches are predicted as not taken, which is most likely true here
+        // since the prediction is most likely to succeed
+        as.BNE(prediction, scratch, &after);
+        biscuit::GPR ripreg = rec.allocatedGPR(X86_REF_RIP);
+        as.MV(ripreg, prediction);
+        as.JR(temp);
+
+        // If predict fails fallback to dispatcher
+        as.Bind(&after);
+    }
+
     rec.backToDispatcher();
     rec.stopCompiling();
 }

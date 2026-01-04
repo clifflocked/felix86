@@ -797,6 +797,86 @@ riscv_v_state* get_riscv_vector_state(void* ctx) {
 #endif
 }
 
+bool handle_rsb_overflow(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
+    if (!g_config.return_predict) {
+        return false;
+    }
+
+    // There's two places our RSB handling can fault
+    // One is on RET, where the stack underflows, and one is on CALL where the stack overflows
+    // In either case we need to modify state->rsb_stack and go back one instruction
+    // which will reload the stack from memory
+    u64 underflow_address = current_state->rsb_stack_start + 4096 + rsb_stack_pages * 4096;
+    u64 overflow_address = current_state->rsb_stack_start + 4096 - 16;
+    u64 fault_address = (u64)info->si_addr;
+    if (fault_address == underflow_address) {
+        // This means it happened during a RET
+        // Further ensure it's right...
+        {
+            u32 current_instruction = *(u32*)pc;
+            u32 data;
+            Assembler tas((u8*)&data, 4);
+            tas.LD(x28, 0, x6);
+            ASSERT(current_instruction == data);
+        }
+        {
+            u32 previous_instruction = *(u32*)pc;
+            u32 data;
+            Assembler tas((u8*)&data, 4);
+            tas.LD(x6, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+            ASSERT(previous_instruction == data);
+        }
+
+        // Return to the previous instruction
+        set_pc(context, pc - 4);
+
+        WARN("RSB stack underflow detected");
+
+        // NOTE: This strategy is not the best and it might be slow if too many underflows happen
+        // We might change our approach if it becomes a problem
+        // Zero the RSB entries from the middle to the end, set rsb_stack to point to the middle
+        // Zeroing ensures we don't get any false predictions from returns
+        u64 middle_of_stack = current_state->rsb_stack_start + 4096 + (rsb_stack_pages / 2) * 4096;
+        memset((void*)middle_of_stack, 0, (rsb_stack_pages / 2) * 4096);
+        current_state->rsb_stack = middle_of_stack;
+
+        return true;
+    } else if (fault_address == overflow_address) {
+        // This means it happened during a RET
+        // Further ensure it's right...
+        {
+            u32 current_instruction = *(u32*)pc;
+            u32 data;
+            Assembler tas((u8*)&data, 4);
+            tas.SD(x1, -16, x28);
+            ASSERT(current_instruction == data);
+        }
+        {
+            u32 previous_instruction = *(u32*)pc;
+            u32 data;
+            Assembler tas((u8*)&data, 4);
+            tas.LD(x28, offsetof(ThreadState, rsb_stack), Recompiler::threadStatePointer());
+            ASSERT(previous_instruction == data);
+        }
+
+        // Return to the previous instruction
+        set_pc(context, pc - 4);
+
+        WARN("RSB stack overflow detected");
+
+        // Move all entries further down. This means that entries past the middle get overwritten
+        // but at least it's better than the alternative of zeroing out the memory
+        u64 start_of_stack = current_state->rsb_stack_start + 4096;
+        u64 middle_of_stack = current_state->rsb_stack_start + 4096 + (rsb_stack_pages / 2) * 4096;
+        u64 bytes_to_move = (rsb_stack_pages / 2) * 4096;
+        memmove((void*)middle_of_stack, (void*)start_of_stack, bytes_to_move);
+        current_state->rsb_stack = middle_of_stack;
+
+        return true;
+    }
+    return false;
+}
+
 bool handle_smc(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
     if (!is_in_jit_code(current_state, (u8*)pc)) {
         WARN("We hit a SIGSEGV ACCERR but PC is not in JIT code...");
@@ -912,7 +992,8 @@ bool handle_wild_sigabrt(ThreadState* current_state, siginfo_t* info, ucontext_t
     }
 }
 
-constexpr std::array<RegisteredHostSignal, 4> host_signals = {{
+constexpr std::array<RegisteredHostSignal, 5> host_signals = {{
+    {SIGSEGV, SEGV_ACCERR, handle_rsb_overflow},
     {SIGSEGV, SEGV_ACCERR, handle_smc},
     {SIGILL, 0, handle_breakpoint},
     {SIGSEGV, 0, handle_wild_sigsegv}, // order matters, relevant sigsegvs are handled before this handler
