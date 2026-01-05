@@ -45,20 +45,46 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
 
 bool do_print = false;
 
+struct MonoGHashTable {
+    void* hash_func;
+    void* key_equal_func;
+
+    void** keys;
+    void** values;
+    int table_size;
+    int in_use;
+    void *value_destroy_func, *key_destroy_func;
+    void* gc_type;
+    void* source;
+    void* key;
+    const char* msg;
+};
+
+MonoGHashTable* target = nullptr;
+int it = 0;
+int i = 0;
+
 void print_args(ThreadState* state) {
     if (do_print) {
-        PLAIN("%lx == %lx?", state->gprs[X86_REF_RDI], state->gprs[X86_REF_RSI]);
+        PLAIN("%lx == %lx? key[%d] is %lx", state->gprs[X86_REF_RDI], state->gprs[X86_REF_RSI], i, target->keys[i]);
+        i++;
     }
 }
 
 void printhash(ThreadState* state) {
+    if (it == 1) {
+        target = (MonoGHashTable*)state->gprs[X86_REF_RDI];
+        PLAIN("Target: %lx", target);
+    }
     PLAIN("rehash with RDI: %lx %d", state->gprs[X86_REF_RDI], getpid());
+    it++;
 }
 
 void dorehash(ThreadState* state) {
     u64 rdi = state->gprs[X86_REF_RDI];
     PLAIN("do_rehash start RDI: %lx %d", rdi, getpid());
     do_print = true;
+    i = 0;
 }
 
 void tablecreated(ThreadState* state) {
