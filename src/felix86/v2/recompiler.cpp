@@ -44,6 +44,7 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
 }
 
 bool do_print = false;
+int iteration = 0;
 
 void print_args(ThreadState* state) {
     if (do_print) {
@@ -56,8 +57,26 @@ void printhash(ThreadState* state) {
 }
 
 void dorehash(ThreadState* state) {
-    PLAIN("do_rehash start RDI: %lx %d", state->gprs[X86_REF_RDI], getpid());
+    u64 rdi = state->gprs[X86_REF_RDI];
+    PLAIN("do_rehash start RDI: %lx %d", rdi, getpid());
     do_print = true;
+    iteration++;
+
+    if (iteration == 8) {
+        u64* table = (u64*)*(u64*)rdi;
+        u64** hashtable = (u64**)*(table + 2);
+        while (true) {
+            PLAIN("key: %lx", *hashtable);
+            hashtable++;
+            if (!*hashtable) {
+                break;
+            }
+        }
+    }
+
+    if (iteration >= 9) {
+        raise(SIGKILL);
+    }
 }
 
 void returndorehash(ThreadState* state) {
