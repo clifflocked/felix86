@@ -43,8 +43,22 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
     ERROR("Incorrect stack in frame, expected %lx, but got %lx", sp_expected, sp_actual);
 }
 
+bool do_print = false;
+
+void print_args(ThreadState* state) {
+    if (do_print) {
+        PLAIN("%lx == %lx?", state->gprs[X86_REF_RDI], state->gprs[X86_REF_RSI]);
+    }
+}
+
 void dorehash(ThreadState* state) {
-    PLAIN("RDI: %lx", state->gprs[X86_REF_RDI]);
+    PLAIN("do_rehash start RDI: %lx %d", state->gprs[X86_REF_RDI], getpid());
+    do_print = true;
+}
+
+void returndorehash(ThreadState* state) {
+    do_print = false;
+    PLAIN("do_rehash end");
 }
 
 struct OptimizationGuard {
@@ -165,8 +179,9 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
         mmx_reg_cache[i].reg = biscuit::Vec(biscuit::v8.Index() + i);
     }
 
-    // hookAddress(0x54d440, print_length);
+    hookAddress(0x4e7760, print_args);
     hookAddress(0x540020, dorehash);
+    hookAddress(0x540158, returndorehash);
 }
 
 Recompiler::~Recompiler() {
