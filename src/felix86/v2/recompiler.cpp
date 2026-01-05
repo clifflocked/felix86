@@ -43,21 +43,8 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
     ERROR("Incorrect stack in frame, expected %lx, but got %lx", sp_expected, sp_actual);
 }
 
-static void print_rdi(ThreadState* state) {
-    u64 rdi = state->gprs[X86_REF_RDI - X86_REF_RAX];
-    if (rdi > 0x10000 && rdi < 0xffff'ffff'0000'0000) {
-        std::string t = fmt::format("rdi is {:x} ", rdi);
-        u32 length = *(u32*)(rdi + 0x10);
-        for (u32 i = 0; i < length; i++) {
-            char c = *(char*)(rdi + 0x10 + 0x4 + i);
-            if (c != 0) {
-                t += c;
-            }
-        }
-        PLAIN("%s (len: %d)", t.c_str(), length);
-    } else {
-        PLAIN("rdi is 0x%lx", rdi);
-    }
+void dorehash(ThreadState* state) {
+    PLAIN("RDI: %lx", state->gprs[X86_REF_RDI]);
 }
 
 struct OptimizationGuard {
@@ -178,7 +165,8 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
         mmx_reg_cache[i].reg = biscuit::Vec(biscuit::v8.Index() + i);
     }
 
-    hookAddress(0x54d440, print_rdi);
+    // hookAddress(0x54d440, print_length);
+    hookAddress(0x540020, dorehash);
 }
 
 Recompiler::~Recompiler() {
