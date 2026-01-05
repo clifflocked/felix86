@@ -74,7 +74,7 @@ void dorehash(ThreadState* state) {
         }
     }
 
-    if (iteration >= 9) {
+    if (iteration >= 10) {
         raise(SIGKILL);
     }
 }
