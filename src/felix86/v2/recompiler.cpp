@@ -43,7 +43,13 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
 }
 
 static void print_rdi(ThreadState* state) {
-    printf("rdi is 0x%lx\n", state->gprs[X86_REF_RDI - X86_REF_RAX]);
+    u64 rdi = state->gprs[X86_REF_RDI - X86_REF_RAX];
+    printf("rdi is 0x%lx ", rdi);
+    if (rdi > 0x10000 && rdi < 0xffff'ffff'0000'0000) {
+        printf("value: %s\n", (char*)rdi);
+    } else {
+        printf("\n");
+    }
 }
 
 struct OptimizationGuard {
