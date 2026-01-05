@@ -62,7 +62,7 @@ void dorehash(ThreadState* state) {
     do_print = true;
     iteration++;
 
-    if (iteration == 8) {
+    if (iteration == 9) {
         u64* table = (u64*)*(u64*)rdi;
         u64** hashtable = (u64**)*(table + 2);
         while (true) {
