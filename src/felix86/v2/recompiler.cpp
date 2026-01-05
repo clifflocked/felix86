@@ -50,7 +50,7 @@ static void print_rdi(ThreadState* state) {
         u32 length = *(u32*)(rdi + 0x10);
         for (u32 i = 0; i < length; i++) {
             char c = *(char*)(rdi + 0x10 + 0x4 + i);
-            t.push_back(c);
+            t += fmt::format("c: {} hex: {:x}", c, (int)c);
         }
         PLAIN("%s (len: %d)", t.c_str(), length);
     } else {
