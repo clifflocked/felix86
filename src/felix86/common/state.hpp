@@ -28,7 +28,7 @@ struct Recompiler;
 struct ThreadState;
 struct SignalHandlerTable;
 
-constexpr const int rsb_stack_pages = 64;
+constexpr const int rsb_stack_pages = 8;
 
 typedef enum : u8 {
     X86_REF_RAX,

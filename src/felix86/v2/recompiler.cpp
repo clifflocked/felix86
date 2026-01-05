@@ -6,6 +6,7 @@
 #include "felix86/common/config.hpp"
 #include "felix86/common/frame.hpp"
 #include "felix86/common/gdbjit.hpp"
+#include "felix86/common/global.hpp"
 #include "felix86/common/log.hpp"
 #include "felix86/common/perf.hpp"
 #include "felix86/common/state.hpp"
@@ -94,21 +95,24 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
     size_t address_cache_size = (1 << address_cache_bits) * sizeof(AddressCacheEntry);
     size_t size = max_code_cache_size + address_cache_size;
     // Try allocating code cache near program so that rip-relative immediates can be made in fewer instructions
-    u64 min = std::min(g_executable_start, g_interpreter_start);
+    u64 min = std::max(g_executable_end, g_interpreter_end);
     void* address = MAP_FAILED;
     // If the program is allocated in 32-bit address space then it's not worth performing this optimization
     // as to not interfere with MAP_32BIT and because immediates can be made in 2 instructions
     if (min > 5 * GB && !g_mode32) {
         for (int i = 0; i < 4; i++) {
-            min -= 256 * MB;
+            min += 256 * MB;
             address = ::mmap((void*)min, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
             if (address != MAP_FAILED) {
                 break;
             }
         }
+
+        if (address == MAP_FAILED) {
+            WARN("Failed to allocate code cache near executable");
+        }
     }
     if (address == MAP_FAILED) {
-        WARN("Failed to allocate code cache near executable");
         address = ::mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     }
     ASSERT_MSG(address != MAP_FAILED, "Failed to reserve code cache for thread %d?", gettid());
