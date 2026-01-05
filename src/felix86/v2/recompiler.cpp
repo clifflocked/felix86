@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdio>
+#include <string>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -44,11 +45,17 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
 
 static void print_rdi(ThreadState* state) {
     u64 rdi = state->gprs[X86_REF_RDI - X86_REF_RAX];
-    printf("rdi is 0x%lx ", rdi);
     if (rdi > 0x10000 && rdi < 0xffff'ffff'0000'0000) {
-        printf("value: %s\n", (char*)rdi);
+        std::string t = fmt::format("rdi is {:x} ", rdi);
+        u32 length = *(u32*)(rdi + 0x10);
+        for (u32 i = 0; i < length; i++) {
+            char c = *(char*)(rdi + 0x10 + 0x4 + i);
+            t += c;
+        }
+        t += "\n";
+        printf("%s", t.c_str());
     } else {
-        printf("\n");
+        printf("rdi is 0x%lx\n", rdi);
     }
 }
 
