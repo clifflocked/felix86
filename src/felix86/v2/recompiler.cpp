@@ -52,10 +52,9 @@ static void print_rdi(ThreadState* state) {
             char c = *(char*)(rdi + 0x10 + 0x4 + i);
             t += c;
         }
-        t += "\n";
-        printf("%s", t.c_str());
+        PLAIN("%s (len: %d)", t.c_str(), length);
     } else {
-        printf("rdi is 0x%lx\n", rdi);
+        PLAIN("rdi is 0x%lx", rdi);
     }
 }
 
