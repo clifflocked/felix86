@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdio>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -7,6 +8,7 @@
 #include "felix86/common/frame.hpp"
 #include "felix86/common/gdbjit.hpp"
 #include "felix86/common/perf.hpp"
+#include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
 #include "felix86/common/utility.hpp"
 #include "felix86/emulator.hpp"
@@ -38,6 +40,10 @@ static void incorrect_magic(void* sp) {
 
 static void incorrect_stack(void* sp_expected, void* sp_actual) {
     ERROR("Incorrect stack in frame, expected %lx, but got %lx", sp_expected, sp_actual);
+}
+
+static void print_rdi(ThreadState* state) {
+    printf("rdi is 0x%lx\n", state->gprs[X86_REF_RDI - X86_REF_RAX]);
 }
 
 struct OptimizationGuard {
@@ -157,6 +163,8 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
         x87_reg_cache[i].reg = biscuit::FPR(biscuit::ft0.Index() + i);
         mmx_reg_cache[i].reg = biscuit::Vec(biscuit::v8.Index() + i);
     }
+
+    hookAddress(0x54d440, print_rdi);
 }
 
 Recompiler::~Recompiler() {
@@ -512,6 +520,18 @@ void Recompiler::markPagesAsReadOnly(u64 start, u64 end) {
 
 u64 Recompiler::compileSequence(u64 rip) {
     compiling = true;
+
+    if (!hooks.empty()) {
+        for (auto& pair : hooks) {
+            if (rip == pair.first) {
+                writebackState();
+                as.MV(a0, threadStatePointer());
+                call((u64)pair.second);
+                restoreState();
+            }
+        }
+    }
+
     u8* bytes = (u8*)rip;
     bool all_zeroes = true;
     if (bytes[0] == 0x00) {

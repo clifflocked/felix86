@@ -682,6 +682,10 @@ private:
 
     void inlineSyscall(int sysno, int argcount);
 
+    void hookAddress(u64 address, void (*func)(ThreadState*)) {
+        hooks.push_back(std::make_pair(address, func));
+    }
+
     static void invalidateAt(ThreadState* state, u8* linked_block);
 
     biscuit::Assembler as{};
@@ -704,6 +708,8 @@ private:
     u64 invalidate_caller_thunk{};
 
     void* start_of_code_cache{};
+
+    std::vector<std::pair<u64, void (*)(ThreadState*)>> hooks;
 
     std::unordered_map<u64, BlockMetadata> block_metadata{};
 
