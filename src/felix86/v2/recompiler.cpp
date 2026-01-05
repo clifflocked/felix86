@@ -44,7 +44,6 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
 }
 
 bool do_print = false;
-int iteration = 0;
 
 void print_args(ThreadState* state) {
     if (do_print) {
@@ -60,23 +59,13 @@ void dorehash(ThreadState* state) {
     u64 rdi = state->gprs[X86_REF_RDI];
     PLAIN("do_rehash start RDI: %lx %d", rdi, getpid());
     do_print = true;
-    iteration++;
+}
 
-    if (iteration == 9) {
-        u64* table = (u64*)*(u64*)rdi;
-        u64** hashtable = (u64**)*(table + 2);
-        while (true) {
-            PLAIN("key: %lx", *hashtable);
-            hashtable++;
-            if (!*hashtable) {
-                break;
-            }
-        }
-    }
-
-    if (iteration >= 10) {
-        raise(SIGKILL);
-    }
+void tablecreated(ThreadState* state) {
+    // 54068a
+    // table in rbx
+    u64 rbx = state->gprs[X86_REF_RBX];
+    PLAIN("New MonoGHashTable* = %lx", rbx);
 }
 
 void returndorehash(ThreadState* state) {
@@ -206,6 +195,7 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
     hookAddress(0x540020, dorehash);
     hookAddress(0x540158, returndorehash);
     hookAddress(0x5401d0, printhash);
+    hookAddress(0x54068a, tablecreated);
 }
 
 Recompiler::~Recompiler() {
