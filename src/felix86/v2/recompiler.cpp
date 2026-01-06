@@ -518,11 +518,6 @@ u64 Recompiler::compile(ThreadState* state, u64 rip) {
 
     u64 end = (u64)as.GetCursorPointer();
 
-    writebackState();
-    as.MV(a0, s11);
-    call((u64)printit);
-    restoreState();
-
     ASSERT(end - start >= 8); // At least 2 instructions, so that our unlinking logic works
 
     host_pc_map[block_meta.address_end - 1] = &block_meta;
@@ -709,6 +704,10 @@ u64 Recompiler::compileSequence(u64 rip) {
         if (current_instruction_index == instructions.size() - 1) {
             resetScratch();
             flushX87();
+            writebackState();
+            as.MV(a0, s11);
+            call((u64)printit);
+            restoreState();
         }
 
         compileInstruction(instruction, operands, rip);
