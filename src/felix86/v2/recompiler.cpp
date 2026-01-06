@@ -43,6 +43,13 @@ static void incorrect_stack(void* sp_expected, void* sp_actual) {
     ERROR("Incorrect stack in frame, expected %lx, but got %lx", sp_expected, sp_actual);
 }
 
+static void printit(ThreadState* state) {
+    u64 val = *(u64*)0x3ff6eabe28;
+    if (val != 0) {
+        PLAIN("Data at 0x3ff6eabe28: %lx (rip: %lx)", val, state->rip);
+    }
+}
+
 bool do_print = false;
 
 struct MonoGHashTable {
@@ -510,6 +517,11 @@ u64 Recompiler::compile(ThreadState* state, u64 rip) {
     u64 end_rip = compileSequence(rip);
 
     u64 end = (u64)as.GetCursorPointer();
+
+    writebackState();
+    as.MV(a0, s11);
+    call((u64)printit);
+    restoreState();
 
     ASSERT(end - start >= 8); // At least 2 instructions, so that our unlinking logic works
 
