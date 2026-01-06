@@ -80,6 +80,10 @@ void printhash(ThreadState* state) {
     it++;
 }
 
+void printstuff(ThreadState* state) {
+    PLAIN("Pointer: %lx (value: %lx)", state->gprs[0] + state->gprs[X86_REF_RSI] * 8, *(u64*)(state->gprs[0] + state->gprs[X86_REF_RSI] * 8));
+}
+
 void dorehash(ThreadState* state) {
     u64 rdi = state->gprs[X86_REF_RDI];
     PLAIN("do_rehash start RDI: %lx %d", rdi, getpid());
@@ -221,7 +225,8 @@ Recompiler::Recompiler(bool relocatable) : relocatable(relocatable) {
     hookAddress(0x540020, dorehash);
     hookAddress(0x540158, returndorehash);
     hookAddress(0x5401d0, printhash);
-    hookAddress(0x54068a, tablecreated);
+    // hookAddress(0x54068a, tablecreated);
+    hookAddress(0x5400b0, printstuff);
 }
 
 Recompiler::~Recompiler() {
