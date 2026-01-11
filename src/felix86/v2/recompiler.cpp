@@ -2211,6 +2211,7 @@ void Recompiler::scanAhead(u64 rip) {
                     auto scan_landing_block = [&](u64 rip_ahead) {
                         bool jump_to_self = rip_ahead == initial_rip;
                         ZydisDecodedInstruction instruction_ahead;
+                        ZydisDecodedOperand operands_ahead[10];
                         u32 changed_this_block = 0;
                         u32 used_this_block = 0;
                         u32 flags_we_care_about =
@@ -2226,7 +2227,7 @@ void Recompiler::scanAhead(u64 rip) {
                                 instruction_ahead = instructions[i].first;
                                 mnemonic = instruction_ahead.mnemonic;
                             } else {
-                                mnemonic = decode(rip_ahead, instruction_ahead, nullptr);
+                                mnemonic = decode(rip_ahead, instruction_ahead, operands_ahead);
                             }
                             bool is_jump = instruction_ahead.meta.branch_type != ZYDIS_BRANCH_TYPE_NONE;
                             bool is_ret = mnemonic == ZYDIS_MNEMONIC_RET || mnemonic == ZYDIS_MNEMONIC_IRETD || mnemonic == ZYDIS_MNEMONIC_IRETQ;
@@ -2259,7 +2260,17 @@ void Recompiler::scanAhead(u64 rip) {
                                 break;
                             }
 
-                            if (is_jump || is_illegal || is_hlt || is_int3) {
+                            if (!g_config.paranoid && is_jump && mnemonic == ZYDIS_MNEMONIC_JMP &&
+                                operands_ahead[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+                                u64 immediate = sextImmediate(getImmediate(&operands[0]), operands[0].imm.size);
+                                rip_ahead = rip_ahead + instruction.length + immediate;
+                                continue; // Continue scanning at jump location
+                            } else if (is_jump) {
+                                // Other type of jump, break
+                                break;
+                            }
+
+                            if (is_illegal || is_hlt || is_int3) {
                                 // Block ahead ended in <= 10 instructions so let's break
                                 break;
                             }
@@ -2500,7 +2511,7 @@ void Recompiler::clearFlag(x86_ref_e ref) {
     }
 
     biscuit::GPR f = flag(ref);
-    as.LI(f, 0);
+    as.MV(f, x0);
 }
 
 void Recompiler::setFlag(x86_ref_e ref) {
