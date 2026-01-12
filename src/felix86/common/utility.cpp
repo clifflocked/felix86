@@ -368,6 +368,7 @@ struct fsave_data_32 {
 static_assert(sizeof(fsave_data_32) == 108);
 
 void felix86_fsave_16(struct ThreadState* state, u64 address) {
+    WARN("frstor16");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fsave_data_16* data = (fsave_data_16*)address;
     for (int i = 0; i < 8; i++) {
@@ -393,6 +394,7 @@ void felix86_fsave_16(struct ThreadState* state, u64 address) {
 }
 
 void felix86_fsave_32(struct ThreadState* state, u64 address) {
+    WARN("fsave32");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fsave_data_32* data = (fsave_data_32*)address;
     for (int i = 0; i < 8; i++) {
@@ -418,6 +420,7 @@ void felix86_fsave_32(struct ThreadState* state, u64 address) {
 }
 
 void felix86_frstor_16(struct ThreadState* state, u64 address) {
+    WARN("frstor16");
     fsave_data_16* data = (fsave_data_16*)address;
 
     state->fpu_top = (data->env.sw >> 11) & 0b111;
@@ -437,6 +440,7 @@ void felix86_frstor_16(struct ThreadState* state, u64 address) {
 }
 
 void felix86_frstor_32(struct ThreadState* state, u64 address) {
+    WARN("frstor32");
     fsave_data_32* data = (fsave_data_32*)address;
 
     state->fpu_top = (data->env.sw >> 11) & 0b111;
@@ -456,6 +460,7 @@ void felix86_frstor_32(struct ThreadState* state, u64 address) {
 }
 
 void felix86_fxsave(struct ThreadState* state, u64 address) {
+    WARN("fxsave");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fxsave_data* data = (fxsave_data*)address;
 
@@ -496,6 +501,7 @@ void felix86_fxsave(struct ThreadState* state, u64 address) {
 }
 
 void felix86_fxrstor(struct ThreadState* state, u64 address) {
+    WARN("fxrstor");
     fxsave_data* data = (fxsave_data*)address;
 
     for (int i = 0; i < 16; i++) {
@@ -1419,6 +1425,7 @@ void felix86_set_segment(ThreadState* state, u64 value, int segment) {
 }
 
 void felix86_fprem(ThreadState* state) {
+    WARN("fprem");
     const u64 st0 = state->fp[TOP(0)];
     const u64 st1 = state->fp[TOP(1)];
     double st0d, st1d;
@@ -1446,6 +1453,7 @@ void felix86_fprem(ThreadState* state) {
 }
 
 void felix86_fxam(ThreadState* state) {
+    WARN("fxam");
     u64 st0 = state->fp[TOP(0)];
     bool sign = st0 >> 63;
     double st0d;
