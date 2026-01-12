@@ -18,6 +18,16 @@
 #include <sys/cachectl.h>
 #endif
 
+#define PRINTMEEEE()                                                                                                                                 \
+    if (state->fpu_sw & (1 << 5)) {                                                                                                                  \
+        std::string test = __func__;                                                                                                                 \
+        WARN("INEXACT BIT SET DURING %s", test.c_str());                                                                                             \
+    }                                                                                                                                                \
+    if (state->mxcsr & (1 << 5)) {                                                                                                                   \
+        std::string test = __func__;                                                                                                                 \
+        WARN("INEXACT (mxcsr) BIT SET DURING %s", test.c_str());                                                                                     \
+    }
+
 #define TOP(x) ((state->fpu_top + x) & 0b111)
 
 struct fxsave_st {
@@ -368,7 +378,6 @@ struct fsave_data_32 {
 static_assert(sizeof(fsave_data_32) == 108);
 
 void felix86_fsave_16(struct ThreadState* state, u64 address) {
-    WARN("frstor16");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fsave_data_16* data = (fsave_data_16*)address;
     for (int i = 0; i < 8; i++) {
@@ -391,10 +400,10 @@ void felix86_fsave_16(struct ThreadState* state, u64 address) {
     if (is_mmx) {
         data->env.cw |= 0x8000;
     }
+    PRINTMEEEE();
 }
 
 void felix86_fsave_32(struct ThreadState* state, u64 address) {
-    WARN("fsave32");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fsave_data_32* data = (fsave_data_32*)address;
     for (int i = 0; i < 8; i++) {
@@ -417,10 +426,11 @@ void felix86_fsave_32(struct ThreadState* state, u64 address) {
     if (is_mmx) {
         data->env.cw |= 0x8000;
     }
+
+    PRINTMEEEE();
 }
 
 void felix86_frstor_16(struct ThreadState* state, u64 address) {
-    WARN("frstor16");
     fsave_data_16* data = (fsave_data_16*)address;
 
     state->fpu_top = (data->env.sw >> 11) & 0b111;
@@ -437,10 +447,11 @@ void felix86_frstor_16(struct ThreadState* state, u64 address) {
             memcpy(&state->fp[i], &f64, sizeof(double));
         }
     }
+
+    PRINTMEEEE();
 }
 
 void felix86_frstor_32(struct ThreadState* state, u64 address) {
-    WARN("frstor32");
     fsave_data_32* data = (fsave_data_32*)address;
 
     state->fpu_top = (data->env.sw >> 11) & 0b111;
@@ -457,10 +468,11 @@ void felix86_frstor_32(struct ThreadState* state, u64 address) {
             memcpy(&state->fp[i], &f64, sizeof(double));
         }
     }
+
+    PRINTMEEEE();
 }
 
 void felix86_fxsave(struct ThreadState* state, u64 address) {
-    WARN("fxsave");
     bool is_mmx = (x87State)state->x87_state == x87State::MMX;
     fxsave_data* data = (fxsave_data*)address;
 
@@ -498,10 +510,11 @@ void felix86_fxsave(struct ThreadState* state, u64 address) {
     if (is_mmx) {
         data->fcw |= 0x8000;
     }
+
+    PRINTMEEEE();
 }
 
 void felix86_fxrstor(struct ThreadState* state, u64 address) {
-    WARN("fxrstor");
     fxsave_data* data = (fxsave_data*)address;
 
     for (int i = 0; i < 16; i++) {
@@ -531,6 +544,7 @@ void felix86_fxrstor(struct ThreadState* state, u64 address) {
 
     state->rmode_x87 = rounding_mode(x86RoundingMode((state->fpu_cw >> 10) & 0b11));
     state->rmode_sse = rounding_mode((x86RoundingMode)((data->mxcsr >> 13) & 0b11));
+    PRINTMEEEE();
 }
 
 void felix86_fstenv_16(ThreadState* state, u64 address) {
@@ -538,6 +552,7 @@ void felix86_fstenv_16(ThreadState* state, u64 address) {
     env->cw = state->fpu_cw;
     env->tw = state->fpu_tw;
     env->sw = (state->fpu_top << 11) | (state->fpu_sw & ~(0b111 << 11));
+    PRINTMEEEE();
 }
 
 void felix86_fstenv_32(ThreadState* state, u64 address) {
@@ -545,6 +560,7 @@ void felix86_fstenv_32(ThreadState* state, u64 address) {
     env->cw = state->fpu_cw;
     env->tw = state->fpu_tw;
     env->sw = (state->fpu_top << 11) | (state->fpu_sw & ~(0b111 << 11));
+    PRINTMEEEE();
 }
 
 void felix86_fldenv_16(struct ThreadState* state, u64 address) {
@@ -554,6 +570,7 @@ void felix86_fldenv_16(struct ThreadState* state, u64 address) {
     state->fpu_sw = env->sw;
     state->fpu_top = (env->sw >> 11) & 0b111;
     state->rmode_x87 = rounding_mode(x86RoundingMode((state->fpu_cw >> 10) & 0b11));
+    PRINTMEEEE();
 }
 
 void felix86_fldenv_32(struct ThreadState* state, u64 address) {
@@ -563,6 +580,7 @@ void felix86_fldenv_32(struct ThreadState* state, u64 address) {
     state->fpu_sw = env->sw;
     state->fpu_top = (env->sw >> 11) & 0b111;
     state->rmode_x87 = rounding_mode(x86RoundingMode((state->fpu_cw >> 10) & 0b11));
+    PRINTMEEEE();
 }
 
 void felix86_pmaddwd(i16* dst, i16* src) {
@@ -1425,7 +1443,6 @@ void felix86_set_segment(ThreadState* state, u64 value, int segment) {
 }
 
 void felix86_fprem(ThreadState* state) {
-    WARN("fprem");
     const u64 st0 = state->fp[TOP(0)];
     const u64 st1 = state->fp[TOP(1)];
     double st0d, st1d;
@@ -1450,10 +1467,10 @@ void felix86_fprem(ThreadState* state) {
 
     // Writeback the new ST(0) value
     memcpy(&state->fp[TOP(0)], &st0d, 8);
+    PRINTMEEEE();
 }
 
 void felix86_fxam(ThreadState* state) {
-    WARN("fxam");
     u64 st0 = state->fp[TOP(0)];
     bool sign = st0 >> 63;
     double st0d;
@@ -1482,6 +1499,7 @@ void felix86_fxam(ThreadState* state) {
     state->fpu_sw |= c1 ? C1_BIT : 0;
     state->fpu_sw |= c2 ? C2_BIT : 0;
     state->fpu_sw |= c3 ? C3_BIT : 0;
+    PRINTMEEEE();
 }
 
 // TODO: One day we need to make this better. It serves to hide some felix86 related files from /proc/self/maps
