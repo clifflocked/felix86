@@ -9717,6 +9717,7 @@ FAST_HANDLE(PCMPESTRM) {
 }
 
 FAST_HANDLE(STMXCSR) {
+    WARN("STMXCSR");
     biscuit::GPR mxcsr = rec.scratch();
     biscuit::GPR address = rec.scratch();
     // TODO: are overflow/inexact/underflow etc flags set in fcsr? if then we need to copy them over
@@ -9726,6 +9727,7 @@ FAST_HANDLE(STMXCSR) {
 }
 
 FAST_HANDLE(LDMXCSR) {
+    WARN("LDMXCSR");
     biscuit::GPR src = rec.getGPR(&operands[0]);
     biscuit::GPR rc = rec.scratch(); // rounding control
     biscuit::GPR temp = rec.scratch();
@@ -9748,7 +9750,7 @@ FAST_HANDLE(LDMXCSR) {
     as.FSRM(x0, temp); // load the equivalent RISC-V rounding mode
 
     // Also save the converted rounding mode for quick access
-    as.SW(src, offsetof(ThreadState, mxcsr), rec.threadStatePointer());
+    as.SW(x0, offsetof(ThreadState, mxcsr), rec.threadStatePointer());
     as.SB(temp, offsetof(ThreadState, rmode_sse), rec.threadStatePointer());
 
     rec.setFsrmSSE(true);

@@ -486,7 +486,7 @@ void felix86_fxsave(struct ThreadState* state, u64 address) {
 
     data->fcw = state->fpu_cw;
     data->fsw = (state->fpu_top << 11) | (state->fpu_sw & ~(0b111 << 11));
-    data->mxcsr = state->mxcsr;
+    // data->mxcsr = state->mxcsr;
 
     // We use this reserved bit in FCW to signify we stored the registers as MMX and thus
     // will not need f80->f64 conversion if loaded with fxrstor
@@ -512,7 +512,7 @@ void felix86_fxrstor(struct ThreadState* state, u64 address) {
     state->fpu_cw = data->fcw;
     state->fpu_sw = data->fsw;
     state->fpu_top = (data->fsw >> 11) & 7;
-    state->mxcsr = data->mxcsr;
+    // state->mxcsr = data->mxcsr;
 
     for (int i = 0; i < 8; i++) {
         if (state->fpu_cw & 0x8000) {
@@ -524,7 +524,7 @@ void felix86_fxrstor(struct ThreadState* state, u64 address) {
     }
 
     state->rmode_x87 = rounding_mode(x86RoundingMode((state->fpu_cw >> 10) & 0b11));
-    state->rmode_sse = rounding_mode((x86RoundingMode)((state->mxcsr >> 13) & 0b11));
+    state->rmode_sse = rounding_mode((x86RoundingMode)((data->mxcsr >> 13) & 0b11));
 }
 
 void felix86_fstenv_16(ThreadState* state, u64 address) {
