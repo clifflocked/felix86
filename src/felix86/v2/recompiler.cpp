@@ -512,7 +512,7 @@ void Recompiler::markPagesAsReadOnly(u64 start, u64 end) {
 }
 
 void check_state(ThreadState* state) {
-    if (state->fpu_sw & (1 << 5)) {
+    if (state->fpu_sw & (0b111111)) {
         WARN("fpu sw set during %lx", state->rip);
     }
 }
