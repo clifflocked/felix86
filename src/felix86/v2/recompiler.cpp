@@ -7,6 +7,7 @@
 #include "felix86/common/frame.hpp"
 #include "felix86/common/gdbjit.hpp"
 #include "felix86/common/perf.hpp"
+#include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
 #include "felix86/common/utility.hpp"
 #include "felix86/emulator.hpp"
@@ -510,6 +511,12 @@ void Recompiler::markPagesAsReadOnly(u64 start, u64 end) {
     }
 }
 
+void check_state(ThreadState* state) {
+    if (state->fpu_sw & (1 << 5)) {
+        WARN("fpu sw set during %lx", state->rip);
+    }
+}
+
 u64 Recompiler::compileSequence(u64 rip) {
     compiling = true;
     u8* bytes = (u8*)rip;
@@ -615,6 +622,11 @@ u64 Recompiler::compileSequence(u64 rip) {
         if (current_instruction_index == instructions.size() - 1) {
             resetScratch();
             flushX87();
+
+            writebackState();
+            as.MV(a0, s11);
+            call((u64)check_state);
+            restoreState();
         }
 
         compileInstruction(instruction, operands, rip);
