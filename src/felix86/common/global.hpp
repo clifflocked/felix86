@@ -94,6 +94,7 @@ extern std::filesystem::path g_executable_path_absolute;
 extern std::filesystem::path g_executable_path_guest_override;
 extern std::filesystem::path g_mounts_path;
 extern bool g_dont_chdir;
+extern bool g_save_spans; // Save instruction spans for each block, used for gdb hook/repl
 
 struct FakeMountNode {
     std::filesystem::path src_path;

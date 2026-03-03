@@ -5,6 +5,7 @@
 #include <linux/sem.h>
 #include <sys/epoll.h>
 #include <sys/resource.h>
+#include <sys/siginfo.h>
 #include <sys/signal.h>
 #include <sys/socket.h>
 #include <sys/statfs.h>

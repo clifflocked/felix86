@@ -787,6 +787,7 @@ Result felix86_syscall_common(felix86_frame* frame, int rv_syscall, u64 arg1, u6
         break;
     }
     case felix86_riscv64_signalfd4: {
+        WARN("Calling signalfd...");
         result = SYSCALL(signalfd4, arg1, arg2, arg3, arg4);
         break;
     }
@@ -1660,12 +1661,16 @@ Result felix86_syscall_common(felix86_frame* frame, int rv_syscall, u64 arg1, u6
         break;
     }
     case felix86_riscv64_rt_sigsuspend: {
-        result = Signals::sigsuspend(state, (sigset_t*)arg1);
+        SIGLOG("rt_sigsuspend");
+        result = SYSCALL(rt_sigsuspend, arg1, arg2);
+        SIGLOG("rt_sigsuspend returned with %d", result);
+        // Will set RAX to EINTR and the actual signal will be handled in the safepoint after the syscall
         break;
     }
     case felix86_riscv64_rt_sigpending: {
-        WARN("rt_sigpending");
+        SIGLOG("rt_sigpending");
         result = SYSCALL(rt_sigpending, arg1, arg2);
+        SIGLOG("rt_sigpending returned with %d", result);
         break;
     }
     case felix86_riscv64_rt_sigreturn: {

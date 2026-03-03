@@ -52,6 +52,7 @@ std::filesystem::path g_executable_path_guest_override{};
 std::filesystem::path g_mounts_path{};
 std::vector<FakeMountNode> g_fake_mounts{};
 bool g_dont_chdir = false;
+bool g_save_spans = false;
 
 // g_output_fd should be replaced upon connecting to the server, however if an error occurs before then we should at least log it
 int g_output_fd = STDERR_FILENO;
@@ -489,6 +490,10 @@ void initialize_globals() {
             std::filesystem::path home_path = getenv("HOME");
             std::filesystem::create_directories(g_config.rootfs_path / home_path.relative_path(), ec);
         }
+    }
+
+    if (g_config.gdb || g_config.calltrace) {
+        g_save_spans = true;
     }
 }
 

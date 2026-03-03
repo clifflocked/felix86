@@ -1,7 +1,12 @@
 #include <array>
+#include <csignal>
 #include <cstring>
 #include <sys/mman.h>
+#include <sys/siginfo.h>
+#include <sys/ucontext.h>
 #include "felix86/common/config.hpp"
+#include "felix86/common/global.hpp"
+#include "felix86/common/log.hpp"
 #include "felix86/common/print.hpp"
 #include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
@@ -807,6 +812,29 @@ riscv_v_state* get_riscv_vector_state(void* ctx) {
 #endif
 }
 
+bool handle_safepoint(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
+    // First we need to check if we are a safepoint
+    // Safepoint instructions perform SD(x0, -8, Recompiler::threadStatePointer())
+    u32 expected_instruction;
+    Assembler tas((u8*)&expected_instruction, sizeof(u32));
+    tas.SD(x0, -8, Recompiler::threadStatePointer());
+
+    u32 current_instruction = *(u32*)pc;
+    if (current_instruction != expected_instruction) {
+        // Not in a safepoint, don't handle signal now
+        // Return. If no host signal handler picks up this signal, then it will be deferred
+        return false;
+    }
+
+    // Handle signal...
+    // In order to handle the signal, we need to set the context in such a way that the JIT will jump
+    // to the dispatcher after returning, the stack will be well prepared. When finished, the code will naturally return to where it was supposed to
+    // return because sigreturn will set the PC according to the ucontext. Or it will longjmp out, but we don't care because we are out of the host
+    // signal handler.
+    UNIMPLEMENTED();
+    return true;
+}
+
 bool handle_smc(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
     if (!is_in_jit_code(current_state, (u8*)pc)) {
         WARN("We hit a SIGSEGV ACCERR but PC is not in JIT code...");
@@ -866,7 +894,7 @@ bool handle_wild_sigsegv(ThreadState* current_state, siginfo_t* info, ucontext_t
             LOG("Current RIP:");
             if (in_jit_code) {
                 BlockMetadata* current_block = get_block_metadata(current_state, pc);
-                if (current_block) {
+                if (current_block && g_save_spans) {
                     u64 actual_rip = get_actual_rip(*current_block, pc);
                     print_address(actual_rip);
                 } else {
@@ -901,7 +929,7 @@ bool handle_wild_sigabrt(ThreadState* current_state, siginfo_t* info, ucontext_t
             LOG("Current RIP:");
             if (in_jit_code) {
                 BlockMetadata* current_block = get_block_metadata(current_state, pc);
-                if (current_block) {
+                if (current_block && g_save_spans) {
                     u64 actual_rip = get_actual_rip(*current_block, pc);
                     print_address(actual_rip);
                 } else {
@@ -922,7 +950,8 @@ bool handle_wild_sigabrt(ThreadState* current_state, siginfo_t* info, ucontext_t
     }
 }
 
-constexpr std::array<RegisteredHostSignal, 4> host_signals = {{
+constexpr std::array<RegisteredHostSignal, 5> host_signals = {{
+    {SIGSEGV, SEGV_ACCERR, handle_safepoint},
     {SIGSEGV, SEGV_ACCERR, handle_smc},
     {SIGILL, 0, handle_breakpoint},
     {SIGSEGV, 0, handle_wild_sigsegv}, // order matters, relevant sigsegvs are handled before this handler
@@ -1027,6 +1056,7 @@ bool dispatch_guest(int sig, siginfo_t* info, void* ctx) {
         u64 pc = gprs[REG_PC];
         BlockMetadata* current_block = get_block_metadata(state, pc);
         if (current_block) {
+            UNIMPLEMENTED();
             u64 actual_rip = get_actual_rip(*current_block, pc);
             reconstruct_state(state, gprs, fprs, xmms);
             state->SetRip(actual_rip);
@@ -1129,6 +1159,16 @@ bool dispatch_guest(int sig, siginfo_t* info, void* ctx) {
     return true;
 }
 
+// Set ucontext_t register values in preparation of signal and setup the stack
+// Afterwards we return from the signal handler normally. The RISC-V PC will be set to the
+// dispatcher and the x86 RIP to the signal handler.
+void prepare_guest_signal(int sig, siginfo_t* info, ucontext_t* uctx) {
+    ThreadState* state = ThreadState::Get();
+    set_pc(uctx, state->recompiler->getCompileNext());
+
+    RegisteredSignal* handler = state->signal_table->getRegisteredSignal(sig);
+}
+
 // Main signal handler function, all signals come here
 void signal_handler(int sig, siginfo_t* info, void* ctx) {
     if (g_config.print_all_signals) {
@@ -1144,14 +1184,25 @@ void signal_handler(int sig, siginfo_t* info, void* ctx) {
         return;
     }
 
-    handled = dispatch_guest(sig, info, ctx);
-    if (handled) {
-        VERBOSE("Guest signal %d was handled successfully", sig);
-        return;
+    ThreadState* state = ThreadState::Get();
+    if (info->si_code > 0) {
+        // Synchronous signal, handle immediately
+        u64 pc = get_pc(ctx);
+        if (is_in_jit_code(state, (u8*)pc)) {
+            // Handle...
+            UNIMPLEMENTED();
+        } else {
+            ERROR("Synchronous signal %s but not in JIT code during RIP=%lx, PC=%lx", sigdescr_np(sig), state->rip, pc);
+        }
+    } else {
+        // Asynchronous signal, defer, unless if we are inside a function like sigwait
+        // If we were in a safepoint, the signal would've been handled
+        // We need to defer the signal
+        ASSERT(sig >= 1 && sig <= 64);
+        int index = sig - 1;
+        state->deferred_signals |= 1 << index;
+        state->deferred_info[index] = *info;
     }
-
-    // Uncaught signal even though we have a signal handler?
-    ERROR("Couldn't find host or guest signal handler for %s", strsignal(sig));
 }
 
 void Signals::initialize() {
@@ -1176,6 +1227,10 @@ void Signals::initialize() {
 void Signals::registerSignalHandler(ThreadState* state, int sig, u64 handler, u64 mask, int flags, u64 restorer) {
     ASSERT(sig >= 1 && sig <= 64);
 
+    if (flags & SA_RESTART) {
+        SIGLOG("SA_RESTART specified for signal handler");
+    }
+
     // Hopefully externally synchronized, no need for locks :cluegi:
     state->signal_table->registerSignal(sig, handler, mask, flags, restorer);
 
@@ -1197,18 +1252,6 @@ void Signals::registerSignalHandler(ThreadState* state, int sig, u64 handler, u6
 RegisteredSignal Signals::getSignalHandler(ThreadState* state, int sig) {
     ASSERT(sig >= 1 && sig <= 64);
     return *state->signal_table->getRegisteredSignal(sig);
-}
-
-int Signals::sigsuspend(ThreadState* state, sigset_t* mask) {
-    sigset_t old_mask = state->signal_mask;
-    memcpy(&state->signal_mask, mask, sizeof(u64));
-    int result = ::sigsuspend(mask);
-    memcpy(&state->signal_mask, &old_mask, sizeof(u64));
-    if (result == -1) {
-        return -errno;
-    } else {
-        return result;
-    }
 }
 
 SignalGuard::SignalGuard() {

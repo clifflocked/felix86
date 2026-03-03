@@ -4083,6 +4083,7 @@ FAST_HANDLE(SYSCALL) {
         }
     }
 
+    // TODO: this LI and the one later in this function can become ripreg+offset_from_start+instruction.length
     biscuit::GPR rcx = rec.allocatedGPR(X86_REF_RCX);
     as.LI(rcx, rip + instruction.length);
     rec.setGPR(X86_REF_RCX, X86_SIZE_QWORD, rcx);
@@ -4092,6 +4093,14 @@ FAST_HANDLE(SYSCALL) {
     as.MV(a0, sp);
     rec.callPointer(offsetof(ThreadState, felix86_syscall));
     rec.restoreState();
+
+    // After restoring the state, insert a safepoint
+    // When a signal happens during a syscall like sigsuspend or read, the signal handler points to the instruction
+    // after the syscall. The syscall itself returns with EINTR, meaning RAX is set to -EINTR, which is done in the function
+    // So we need to update the RIP register to point to the correct RIP, in case a signal happens so as to set the correct
+    // RIP in the guest ucontext_t
+    as.LI(Recompiler::allocatedGPR(X86_REF_RIP), rip + instruction.length);
+    rec.insertSafepoint();
 }
 
 FAST_HANDLE(MOVZX) {

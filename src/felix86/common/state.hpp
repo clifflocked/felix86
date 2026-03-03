@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <sys/siginfo.h>
 #include "biscuit/isa.hpp"
 #include "felix86/common/global.hpp"
 #include "felix86/common/log.hpp"
@@ -240,6 +242,9 @@ struct ThreadState {
     u32 gdt[32]{};
 
     u64 persona = 0;
+
+    u64 deferred_signals = 0;
+    std::array<siginfo_t, 64> deferred_info{};
 
 #define X(name) u64 name = (u64)::name;
     // We don't want our code to hardcode pointers in order to be reusable (cached)

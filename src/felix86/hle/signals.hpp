@@ -103,8 +103,6 @@ struct Signals {
     // So we want the signal handler to return here. So the address we give it is to a thunk that jumps here.
     static void sigreturn(ThreadState* state);
 
-    static int sigsuspend(ThreadState* state, sigset_t* mask);
-
     static int sigprocmask(ThreadState* state, int how, sigset_t* new_set, sigset_t* old_set);
 };
 

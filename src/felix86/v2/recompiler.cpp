@@ -498,6 +498,10 @@ u64 Recompiler::compile(ThreadState* state, u64 rip) {
     return start;
 }
 
+void Recompiler::insertSafepoint() {
+    as.SD(x0, -8, Recompiler::threadStatePointer());
+}
+
 void Recompiler::markPagesAsReadOnly(u64 start, u64 end) {
     if (!g_config.protect_pages) {
         return;
@@ -549,10 +553,16 @@ u64 Recompiler::compileSequence(u64 rip) {
 
     bool ran_mmx_once = false;
 
+    // Insert a safepoint at the start of the block, as it's easier than doing it at the end of the block
+    // TODO: insert safepoints within the block every N instructions
+    insertSafepoint();
+
     while (compiling) {
         auto& [instruction, operands] = instructions[current_instruction_index];
 
-        block_meta.instruction_spans.push_back({rip, (u64)as.GetCursorPointer()});
+        if (g_save_spans) {
+            block_meta.instruction_spans.push_back({rip, (u64)as.GetCursorPointer()});
+        }
 
         bool is_mmx = (operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && operands[0].reg.value >= ZYDIS_REGISTER_MM0 &&
                        operands[0].reg.value <= ZYDIS_REGISTER_MM7) ||
