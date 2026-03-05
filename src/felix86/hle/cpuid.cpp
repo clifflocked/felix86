@@ -150,17 +150,21 @@ Cpuid felix86_cpuid_impl(u32 leaf, u32 subleaf) {
         bit_set(result.ecx, 9, is_feature_enabled(x86_feature::SSSE3));
         bit_set(result.ecx, 19, is_feature_enabled(x86_feature::SSE4_1));
         bit_set(result.ecx, 20, is_feature_enabled(x86_feature::SSE4_2));
+        bit_set(result.ecx, 23, is_feature_enabled(x86_feature::LZCNT_POPCNT));
         bit_set(result.ecx, 25, is_feature_enabled(x86_feature::AES));
+        bit_set(result.ecx, 27, is_feature_enabled(x86_feature::OSXSAVE));
         bit_set(result.ecx, 28, is_feature_enabled(x86_feature::AVX));
         bit_set(result.ecx, 29, is_feature_enabled(x86_feature::F16C));
     }
 
     if (found && leaf == 0x0000'0007) {
         bit_set(result.ecx, 9, is_feature_enabled(x86_feature::VAES));
+        bit_set(result.ecx, 10, is_feature_enabled(x86_feature::VPCLMULQDQ));
         bit_set(result.ebx, 5, is_feature_enabled(x86_feature::AVX2));
     }
 
     if (found && leaf == 0x8000'0001) {
+        bit_set(result.ecx, 0, true); // LAHF/SAHF
         bit_set(result.ecx, 5, is_feature_enabled(x86_feature::LZCNT_POPCNT));
     }
 
