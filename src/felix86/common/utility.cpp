@@ -1631,6 +1631,26 @@ std::string felix86_maps() {
     return ret;
 }
 
+static std::string felix86_cpuinfo_cachesize() {
+    std::string cachesize;
+    int c;
+
+    // Maybe this shouldn't be a hardcoded path, but I'm too lazy to think of a better solution.
+    FILE *sysfs_cachesize = fopen("/sys/devices/system/cpu/cpu0/cache/index3/size", "r");
+    if (sysfs_cachesize == NULL) // maybe no L3 cache, so just use L2
+        sysfs_cachesize = fopen("/sys/devices/system/cpu/cpu0/cache/index2/size", "r");
+    if (sysfs_cachesize == NULL) // if unable to access sysfs, just default to the previous 512.
+        return "512";
+
+    while ((c = fgetc(sysfs_cachesize)) != EOF) {
+        if ('0' <= c && c <= '9')
+            cachesize.push_back(c);
+    }
+
+    fclose(sysfs_cachesize);
+    return cachesize;
+}
+
 const std::string& felix86_cpuinfo() {
 #define ADD_FLAG(cond, name)                                                                                                                         \
     do {                                                                                                                                             \
@@ -1758,7 +1778,7 @@ const std::string& felix86_cpuinfo() {
             result += fmt::format("stepping\t: {}\n", cpuid_1.eax & 0xF);
             result += "microcode\t: 0x42c\n";
             result += "cpu MHz\t\t: 1000.0\n";  // TODO: calculate it
-            result += "cache size\t: 512 KB\n"; // TODO: get from /sys/devices/system/cpu/cpu%d/cache/index%d/size (if no L3, use L2)
+            result += fmt::format("cache size\t: {} KB\n", felix86_cpuinfo_cachesize());
             result += "physical id\t: 0\n";
             result += fmt::format("siblings\t: {}\n", core_count);
             result += fmt::format("core id\t\t: {}\n", i);
