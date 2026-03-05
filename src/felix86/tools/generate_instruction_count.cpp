@@ -291,7 +291,10 @@ int main() {
     g_config.inline_syscalls = false;
     g_config.scan_ahead_multi = false;
     Extensions::G = true;
-    Extensions::B = true;
+    Extensions::Zba = true;
+    Extensions::Zbb = true;
+    Extensions::Zbs = true;
+    Extensions::Zbc = true;
     Extensions::C = true;
     Extensions::V = true;
     Extensions::VLEN = 256;
@@ -1594,6 +1597,8 @@ int main() {
     GEN(vpbroadcastd(ymm1, ptr[rdi]));
     GEN(vpbroadcastq(xmm1, ptr[rdi]));
     GEN(vpbroadcastq(ymm1, ptr[rdi]));
+
+    GEN_AVX_YMM3_IMM(vpclmulqdq);
 
     std::ofstream avx("counts/AVX.json");
     avx << json.dump(4);
